@@ -240,7 +240,7 @@ def main():
     board_size = args.size
     print(f"创建 {board_size}x{board_size} 的棋盘")
 
-    mod = importlib.import_module("241880200")  # 加载学号同名模块（不带 .py）
+    mod = importlib.import_module("STU_ID")  # 加载学号同名模块（不带 .py）
     A1 = mod.Search                              # 取出 Search 类作为先手的类
 
     agent1 = A1(1)

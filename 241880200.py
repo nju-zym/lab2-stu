@@ -6,22 +6,29 @@ import time
 """主要思路: 以minimax搜索、alpha-beta剪枝为基础, 逐步完善动态深度限制和启发式评估函数, 使用滑窗卷积统计己方/对方的棋形并加权。"""
 
 
+"""评分表语义
+- LIVE_FOUR: 连四且两端皆空（双活口）
+- DEAD_FOUR: 连四且仅一端为空（单活口、半开放四）
+- BROKEN_FOUR: 断点四（1-1-0-1-1 型），至少一端可延伸即为强威胁
+- SLEEPY_THREE: 眠三/跳三（含开放跳三），潜在形成冲四
+注：组合加分基于计数的威胁叠加，而非单个窗口评分。
+"""
 SCORE_TABLE = {
     "WIN": 1000000,  # 五连
-    "LIVE_FOUR": 50000,  # 活四
-    "BROKEN_FOUR": 45000,  # 冲四/断点四: 一步连五
-    "DOUBLE_DEAD_FOUR": 50000,  # 双冲四
-    "DEAD_FOUR_LIVE_THREE": 50000,  # 冲四活三
+    "LIVE_FOUR": 50000,  # 活四（双活口）
+    "BROKEN_FOUR": 45000,  # 断点四/冲四：一步成五或逼应
+    "DOUBLE_DEAD_FOUR": 50000,  # 任意两处四类威胁并存（含断点四/眠四）
+    "DEAD_FOUR_LIVE_THREE": 50000,  # 四类威胁+活三并存
     "DOUBLE_LIVE_THREE": 10000,  # 双活三
-    "LIVE_THREE": 2000,  # 活三 (价值显著提高)
-    "SLEEPY_THREE": 500,  # 眠三 (能形成冲四的跳三或普通眠三)
+    "LIVE_THREE": 8000,  # 活三（双活口）
+    "SLEEPY_THREE": 1000,  # 眠三/跳三
     "LIVE_TWO": 100,  # 活二
-    "DEAD_FOUR": 50,  # 死四 (价值很低, 因为已被对方防住)
+    "DEAD_FOUR": 50,  # 眠四（单活口）
     "DEAD_THREE": 10,  # 死三
     "DEAD_TWO": 2,  # 死二
 }
 
-# 棋形表
+# 棋形表示例（参考用，不在评估中直接使用）
 KERNELS = {
     # 五连
     "WIN": [np.array([1, 1, 1, 1, 1], dtype=np.int8)],
@@ -88,12 +95,12 @@ class Search(Agent):
         n = len(board)
         total = n * n
         empties = int(np.count_nonzero(board == 0))
-        fill_ratio = (total - empties) / max(1, total)
+        fill_ratio = (total - empties) / total
         if fill_ratio < 0.2:
             return 3
-        if fill_ratio < 0.4:
+        elif fill_ratio < 0.4:
             return 4
-        if fill_ratio < 0.6:
+        elif fill_ratio < 0.6:
             return 5
         return 6
 
@@ -102,7 +109,7 @@ class Search(Agent):
         - 若在某层用尽时间, 返回上一层的结果。
         - 使用 self._deadline 供递归检查超时。
         """
-        self._deadline = time.time() + max(0.01, time_limit_s)
+        self._deadline = time.time() + time_limit_s
 
         best_move = None
         best_score = None
@@ -298,6 +305,7 @@ class Search(Agent):
                 feats = {
                     "LIVE_FOUR": 0,
                     "DEAD_FOUR": 0,
+                    "BROKEN_FOUR": 0,
                     "LIVE_THREE": 0,
                     "SLEEPY_THREE": 0,
                 }
@@ -372,7 +380,7 @@ class Search(Agent):
                         right_open = (g + r + 1 < 6) and (mapped[g + r + 1] == 0)
                         if left_open or right_open:
                             score += SCORE_TABLE["BROKEN_FOUR"]
-                            feats["DEAD_FOUR"] += 1
+                            feats["BROKEN_FOUR"] += 1
                 return score, feats
 
             me_score, me_feats = scan_runs(1)
@@ -382,8 +390,20 @@ class Search(Agent):
         total = 0
         me = self.player
         # 统计用于组合棋形的计数（我方与对方各自）
-        combo_me = {"LIVE_FOUR": 0, "DEAD_FOUR": 0, "LIVE_THREE": 0, "SLEEPY_THREE": 0}
-        combo_opp = {"LIVE_FOUR": 0, "DEAD_FOUR": 0, "LIVE_THREE": 0, "SLEEPY_THREE": 0}
+        combo_me = {
+            "LIVE_FOUR": 0,
+            "DEAD_FOUR": 0,
+            "BROKEN_FOUR": 0,
+            "LIVE_THREE": 0,
+            "SLEEPY_THREE": 0,
+        }
+        combo_opp = {
+            "LIVE_FOUR": 0,
+            "DEAD_FOUR": 0,
+            "BROKEN_FOUR": 0,
+            "LIVE_THREE": 0,
+            "SLEEPY_THREE": 0,
+        }
 
         # 行/列/对角线上统一滑窗: 全部转换为相对视角并做边界填充(中性哨兵), 仅用6格窗口
         for line in lines():
@@ -409,10 +429,11 @@ class Search(Agent):
         # 组合型
         def combo_bonus(cnt):
             bonus = 0
-            if cnt["DEAD_FOUR"] >= 2 and "DOUBLE_DEAD_FOUR" in SCORE_TABLE:
+            four_threats = cnt["LIVE_FOUR"] + cnt["DEAD_FOUR"] + cnt["BROKEN_FOUR"]
+            if four_threats >= 2 and "DOUBLE_DEAD_FOUR" in SCORE_TABLE:
                 bonus += SCORE_TABLE["DOUBLE_DEAD_FOUR"]
             if (
-                cnt["DEAD_FOUR"] >= 1
+                four_threats >= 1
                 and cnt["LIVE_THREE"] >= 1
                 and "DEAD_FOUR_LIVE_THREE" in SCORE_TABLE
             ):

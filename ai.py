@@ -15,12 +15,12 @@ class Search(Agent):
     ENABLE_THREAT_EXTENSION = False  # 叶节点存在“四/活三”时的轻量扩展开关
 
     # 评估分值（可微调）
-    SCORE_FIVE = 10_000_000
-    SCORE_OPEN_FOUR = 200_000
-    SCORE_CLOSED_FOUR = 50_000
-    SCORE_OPEN_THREE = 4_000
-    SCORE_SLEEP_THREE = 800
-    SCORE_OPEN_TWO = 150
+    SCORE_FIVE = 10_000_000  # 五连
+    SCORE_OPEN_FOUR = 200_000  # 活四
+    SCORE_CLOSED_FOUR = 50_000  # 冲四
+    SCORE_OPEN_THREE = 4_000  # 活三
+    SCORE_SLEEP_THREE = 800  # 眠三
+    SCORE_OPEN_TWO = 150  # 活二
 
     # 置换表条目标记
     TT_EXACT = 0
@@ -41,6 +41,8 @@ class Search(Agent):
         self.history = {}  # history heuristic: (player,r,c) -> score
         self.root_depth = 0
         self.best_move_last_completed = None
+        # 增量 Zobrist 哈希（含行棋方）：仅在开局/同步时全量计算一次
+        self.hash = 0
 
     # ================= 对外主入口 =================
     def make_move(self, board):
@@ -53,6 +55,8 @@ class Search(Agent):
         self.time_up = False
         self.start_time = time.perf_counter()
         self.best_move_last_completed = None
+        # 初始化当前局面的 Zobrist 哈希（含行棋方）
+        self.hash = self._hash(board, self.player)
 
         # 空棋盘：走中心
         stones = np.argwhere(board != 0)
@@ -76,7 +80,14 @@ class Search(Agent):
 
             self.root_depth = depth
             score, move = self._negamax(
-                board, depth, alpha, beta, self.player, last_move=None, ply=0
+                board,
+                depth,
+                alpha,
+                beta,
+                self.player,
+                last_move=None,
+                ply=0,
+                hash_key=self.hash,
             )
 
             if self.time_up:
@@ -107,7 +118,7 @@ class Search(Agent):
         return cands[0] if cands else None
 
     # ================= 搜索内核 =================
-    def _negamax(self, board, depth, alpha, beta, player, last_move, ply):
+    def _negamax(self, board, depth, alpha, beta, player, last_move, ply, hash_key):
         # 时间检查
         if self._overtime():
             self.time_up = True
@@ -128,11 +139,13 @@ class Search(Agent):
             # 轻量威胁扩展（可选）
             if self.ENABLE_THREAT_EXTENSION and self._has_quick_threat(board):
                 # 只扩展威胁着，避免爆炸
-                return self._extend_threat(board, alpha, beta, player, last_move, ply)
+                return self._extend_threat(
+                    board, alpha, beta, player, last_move, ply, hash_key
+                )
             return val, None
 
         # 置换表查询
-        key = self._hash(board, player)
+        key = int(hash_key)
         entry = self.tt.get(key)
         if entry is not None:
             et_depth, et_flag, et_val, et_move = entry
@@ -169,6 +182,12 @@ class Search(Agent):
 
             # 着法落子
             board[r][c] = player
+            # 计算子节点哈希（落子 + 轮到对手）
+            child_hash = (
+                int(hash_key)
+                ^ int(self.zobrist[player - 1, r, c])
+                ^ int(self.zobrist_turn)
+            )
 
             # LMR：对排序较后的非强应走法尝试减深（保守）
             reduce = 0
@@ -189,15 +208,30 @@ class Search(Agent):
                     3 - player,
                     (r, c),
                     ply + 1,
+                    child_hash,
                 )
                 if val > alpha:
                     # 重新全深验证
                     val, _ = self._negamax(
-                        board, depth - 1, -beta, -alpha, 3 - player, (r, c), ply + 1
+                        board,
+                        depth - 1,
+                        -beta,
+                        -alpha,
+                        3 - player,
+                        (r, c),
+                        ply + 1,
+                        child_hash,
                     )
             else:
                 val, _ = self._negamax(
-                    board, depth - 1, -beta, -alpha, 3 - player, (r, c), ply + 1
+                    board,
+                    depth - 1,
+                    -beta,
+                    -alpha,
+                    3 - player,
+                    (r, c),
+                    ply + 1,
+                    child_hash,
                 )
 
             val = -val
@@ -283,8 +317,10 @@ class Search(Agent):
                     s += 20_000
                 # 局部潜力
                 s += self._point_potential(board, r, c, player)
-                # 防守强应
-                s += int(self._creates_four(board, r, c, 3 - player)) * 50_000
+            board[r][c] = 0
+            # 防守强应：若对手在此能成“四/冲四”，我方落此为高优先
+            board[r][c] = 3 - player
+            s += int(self._creates_four(board, r, c, 3 - player)) * 50_000
             board[r][c] = 0
             scores[(r, c)] = s
 
@@ -593,7 +629,7 @@ class Search(Agent):
 
         return any(has_pat(a) for a in lines)
 
-    def _extend_threat(self, board, alpha, beta, player, last_move, ply):
+    def _extend_threat(self, board, alpha, beta, player, last_move, ply, hash_key):
         # 轻量威胁扩展：仅扩展能形成四/活三的走法
         moves = self._generate_candidates(board)
         moves = [m for m in moves if self._would_be_threat(board, m, player)]
@@ -605,7 +641,14 @@ class Search(Agent):
             if self._overtime():
                 break
             board[r][c] = player
-            val, _ = self._negamax(board, 1, -beta, -alpha, 3 - player, (r, c), ply + 1)
+            child_hash = (
+                int(hash_key)
+                ^ int(self.zobrist[player - 1, r, c])
+                ^ int(self.zobrist_turn)
+            )
+            val, _ = self._negamax(
+                board, 1, -beta, -alpha, 3 - player, (r, c), ply + 1, child_hash
+            )
             val = -val
             board[r][c] = 0
             if val > best:
