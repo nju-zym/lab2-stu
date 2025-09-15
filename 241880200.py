@@ -16,7 +16,8 @@ SCORE_TABLE = {
     "LIVE_THREE": 2000,  # 活三 (价值显著提高)
     "SLEEPY_THREE": 500,  # 眠三 (能形成冲四的跳三或普通眠三)
     "LIVE_TWO": 100,  # 活二
-    "DEAD_FOUR": 50,  # 死四 (价值很低, 因为已被对方防住)
+    # 单端开放的四(如 1-1-1-1-0 或 0-1-1-1-1) 也是一步连五, 提升权重
+    "DEAD_FOUR": 45000,
     "DEAD_THREE": 10,  # 死三
     "DEAD_TWO": 2,  # 死二
 }
@@ -75,11 +76,72 @@ class Search(Agent):
         """使用迭代加深 + alpha-beta + 候选生成, 在时间限制内返回一步。"""
         # 留出安全余量, 防止超时 (外部限制为60s)
         time_budget_sec = 58.5
+        # 1) 立即胜利: 若我方有一手即可连五, 直接下
+        win_now = self._find_immediate_win(board, self.player)
+        if win_now is not None:
+            return win_now
+
+        # 2) 立即堵截: 若对手下一手可连五, 立即在该点堵住
+        block_now = self._find_immediate_win(board, self.opponent)
+        if block_now is not None:
+            return block_now
+
+        # 3) 搜索
         best_move = self.iterative_deepening(board, time_budget_sec)
         if best_move is None:
-            moves = self.get_moves(board)
-            return moves[0] if moves else None
+            # 4) 改进回退: 选中心或启发式最佳候选
+            fb = self._best_fallback_move(board)
+            return fb
         return best_move
+
+    def _is_win_from(self, board, row, col, player):
+        """检查把 (row, col) 落为 player 后是否形成五连。"""
+        if board[row][col] != 0:
+            return False
+        n = len(board)
+        # 落子
+        board[row][col] = player
+        try:
+            directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
+            for dx, dy in directions:
+                count = 1
+                x, y = row + dx, col + dy
+                while 0 <= x < n and 0 <= y < n and board[x][y] == player:
+                    count += 1
+                    x += dx
+                    y += dy
+                x, y = row - dx, col - dy
+                while 0 <= x < n and 0 <= y < n and board[x][y] == player:
+                    count += 1
+                    x -= dx
+                    y -= dy
+                if count >= 5:
+                    return True
+            return False
+        finally:
+            # 回溯
+            board[row][col] = 0
+
+    def _find_immediate_win(self, board, player):
+        """找到一手可立刻获胜的位置, 若无则返回 None。"""
+        for r, c in self.get_moves(board):
+            if self._is_win_from(board, r, c, player):
+                return (r, c)
+        return None
+
+    def _best_fallback_move(self, board):
+        """当搜索失败时的兜底选择: 优先中心, 否则用候选启发式。"""
+        n = len(board)
+        center = n // 2
+        if board[center][center] == 0:
+            return (center, center)
+        cands = self.get_candidate_moves(board)
+        if cands:
+            ordered = self.order_moves(board, cands, True)
+            if ordered:
+                return ordered[0]
+        moves = self.get_moves(board)
+        return moves[0] if moves else None
 
     def max_depth(self, board):
         """动态设置迭代加深的最大上限(软上限), 实际深度由时间裁剪。
@@ -87,7 +149,7 @@ class Search(Agent):
         """
         n = len(board)
         total = n * n
-        empties = int(np.count_nonzero(board == 0))
+        empties = int(np.count_nonzero(np.asarray(board) == 0))
         fill_ratio = (total - empties) / max(1, total)
         if fill_ratio < 0.2:
             return 3
@@ -187,7 +249,7 @@ class Search(Agent):
     def get_candidate_moves(self, board, radius=2):
         """候选步生成: 只考虑距离任一已有棋子不超过 radius 的空位。"""
         n = len(board)
-        stones = np.argwhere(board != 0)
+        stones = np.argwhere(np.asarray(board) != 0)
         if stones.size == 0:
             center = n // 2
             return [(center, center)]
@@ -238,20 +300,21 @@ class Search(Agent):
         """卷积式评估: 统一使用长度6的滑窗, 并对每条线做边界填充 2 后遍历行/列/对角线。
         统计己方/对方的活四、眠四、活三、跳三、眠三、活二、眠二等棋形并加权; 若出现五连, 立即返回极值分。
         """
-        n = len(board)
+        board_np = np.asarray(board)
+        n = len(board_np)
 
         def lines():
             # 行
             for i in range(n):
-                yield board[i, :]
+                yield board_np[i, :]
             # 列
             for j in range(n):
-                yield board[:, j]
+                yield board_np[:, j]
             # 正对角线(斜下): 全部对角线
             for k in range(-(n - 1), n):
-                yield np.diag(board, k=k)
+                yield np.diag(board_np, k=k)
             # 反对角线(斜上): 全部对角线
-            flipped = np.fliplr(board)
+            flipped = np.fliplr(board_np)
             for k in range(-(n - 1), n):
                 yield np.diag(flipped, k=k)
 
@@ -381,7 +444,7 @@ class Search(Agent):
 
         total = 0
         me = self.player
-        # 统计用于组合棋形的计数（我方与对方各自）
+        # 统计用于组合棋形的计数（我方与对方各自）, 每条线至多+1，避免窗口重叠导致暴增
         combo_me = {"LIVE_FOUR": 0, "DEAD_FOUR": 0, "LIVE_THREE": 0, "SLEEPY_THREE": 0}
         combo_opp = {"LIVE_FOUR": 0, "DEAD_FOUR": 0, "LIVE_THREE": 0, "SLEEPY_THREE": 0}
 
@@ -395,16 +458,25 @@ class Search(Agent):
             # 边界填充: 使用中性哨兵(既非我方也非对方, 也非空), 避免被误认为对手
             BORDER_SENTINEL = 2
             padded = np.pad(mapped_line, (1, 1), constant_values=BORDER_SENTINEL)
+            # 该条线上的特征存在标记（避免重复计数）
+            line_me_flags = {"LIVE_FOUR": False, "DEAD_FOUR": False, "LIVE_THREE": False, "SLEEPY_THREE": False}
+            line_opp_flags = {"LIVE_FOUR": False, "DEAD_FOUR": False, "LIVE_THREE": False, "SLEEPY_THREE": False}
             for i in range(0, len(padded) - 6 + 1):
                 win = padded[i : i + 6]
                 s, feats_me, feats_opp = score_window(win)
                 if s >= SCORE_TABLE["WIN"] or s <= -SCORE_TABLE["WIN"]:
                     return s
                 total += s
-                # 组合计数累积
+                # 组合计数：线级去重
                 for k in feats_me:
-                    combo_me[k] += feats_me[k]
-                    combo_opp[k] += feats_opp[k]
+                    if feats_me[k] > 0:
+                        line_me_flags[k] = True
+                    if feats_opp[k] > 0:
+                        line_opp_flags[k] = True
+            # 扫完整条线后, 再累加一次
+            for k in combo_me:
+                combo_me[k] += int(line_me_flags[k])
+                combo_opp[k] += int(line_opp_flags[k])
 
         # 组合型
         def combo_bonus(cnt):
