@@ -11,7 +11,9 @@ from agent import Agent
 class Search(Agent):
     """单文件的五子棋搜索 AI 框架。"""
 
+    # ------------------------------
     # 对外接口区域
+    # ------------------------------
 
     def __init__(
         self,
@@ -37,7 +39,7 @@ class Search(Agent):
         }
 
         # 搜索深度上限
-        self._max_depth_upper = 6
+        self._max_depth_upper = 7
 
         # 预留的数据结构
         self._zobrist_seed = 20240515
@@ -64,7 +66,9 @@ class Search(Agent):
 
         return best_move
 
+    # ------------------------------
     # 核心搜索逻辑
+    # ------------------------------
 
     def _iterative_deepening(
         self,
@@ -304,7 +308,9 @@ class Search(Agent):
 
         return best
 
+    # ------------------------------
     # 走法生成与排序
+    # ------------------------------
 
     def _generate_moves(
         self,
@@ -397,7 +403,9 @@ class Search(Agent):
         scored_moves.sort(key=lambda item: item[0], reverse=True)
         return [move for _, move in scored_moves]
 
+    # ------------------------------
     # 评估函数相关
+    # ------------------------------
 
     def _evaluate_board(
         self,
@@ -419,7 +427,27 @@ class Search(Agent):
 
         return player_score - opponent_score
 
+    def _incremental_update(
+        self,
+        board_state: Dict[str, object],
+        move: Tuple[int, int],
+        previous_score: float,
+    ) -> float:
+        """增量评估：基于上一分数快速更新。"""
+        # 当前回退为全量评估；若后续确认瓶颈，可实现局部增量更新。
+        return self._evaluate_board(board_state)
+
+    def _detect_patterns(
+        self,
+        board_array: np.ndarray,
+    ) -> Dict[str, int]:
+        """统计棋盘上的关键棋形，用于评分。"""
+        # 预留丰富棋形检测的接口。
+        return {}
+
+    # ------------------------------
     # 局面变换与回溯
+    # ------------------------------
 
     def _apply_move(
         self,
@@ -477,7 +505,9 @@ class Search(Agent):
         board_state["empty_count"] += 1
         board_state["hash"] = record.get("previous_hash", 0)
 
+    # ------------------------------
     # 置换表与哈希
+    # ------------------------------
 
     def _probe_transposition(
         self,
@@ -587,7 +617,9 @@ class Search(Agent):
 
         return int(current_hash)
 
+    # ------------------------------
     # 时间控制与终止条件
+    # ------------------------------
 
     def _check_timeout(self, deadline: float) -> bool:
         """判断是否触发超时，供搜索在递归中及时返回。"""
@@ -606,7 +638,9 @@ class Search(Agent):
 
         return board_state["empty_count"] == 0
 
+    # ------------------------------
     # 辅助构造与工具函数
+    # ------------------------------
 
     def _build_state(self, board: np.ndarray) -> Dict[str, object]:
         """将外部棋盘矩阵包装为内部状态字典。"""
@@ -650,7 +684,9 @@ class Search(Agent):
         """获取对手编号。"""
         return 1 if player == 2 else 2
 
+    # ------------------------------
     # 内部工具函数
+    # ------------------------------
 
     def _select_search_depth(self, board_state: Dict[str, object]) -> int:
         """根据局面稠密度和时间预算选择搜索深度。"""
@@ -659,10 +695,10 @@ class Search(Agent):
         total = board_state["size"] ** 2
 
         if empties > total * 0.6:
-            return 4
-        if empties > total * 0.3:
             return 5
-        return min(self._max_depth_upper, 6)
+        if empties > total * 0.3:
+            return 6
+        return min(self._max_depth_upper, 7)
 
     def _estimate_move_potential(
         self,

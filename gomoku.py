@@ -240,10 +240,12 @@ def main():
     board_size = args.size
     print(f"创建 {board_size}x{board_size} 的棋盘")
 
-    mod = importlib.import_module("STU_ID")  # 加载学号同名模块（不带 .py）
-    A1 = mod.Search                              # 取出 Search 类作为先手的类
-
-    agent1 = A1(1)
+    from search_framework import Search
+    from search_framework_simple import Search as Search_simple
+    from human import Human
+    from Cloudy_1 import Search as Cloudy_1
+    from Cloudy_2 import Search as Cloudy_2
+    agent1 = Search(1)
 
     if args.method == "human":
         from human import Human
@@ -251,13 +253,20 @@ def main():
         agent2 = Human(2)
     elif args.method == "random":
         from agent import Agent
-
         agent2 = Agent(2)
 
-    elif args.method == "ai":
-        from ai import Search
-
+    elif args.method == "Cloudy_1":
+        from Cloudy_1 import Search as Cloudy_1
         agent2 = Search(2)
+
+    elif args.method == "search_framework":
+        from search_framework import Search
+        agent2 = Search(2)
+
+    elif args.method == "search_framework_simple":
+        from search_framework_simple import Search as Search_simple
+        agent2 = Search_simple(2)
+
     else:
         try:
             mod = importlib.import_module(f"{args.method}")
