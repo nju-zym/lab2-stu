@@ -11,9 +11,7 @@ from agent import Agent
 class Search(Agent):
     """单文件的五子棋搜索 AI 框架。"""
 
-    # ------------------------------
     # 对外接口区域
-    # ------------------------------
 
     def __init__(
         self,
@@ -27,43 +25,15 @@ class Search(Agent):
         self.time_limit = time_limit
 
         # 评分常量
-        self._win_score = 100_000
-
-        # 扩充的棋形权重系统 - 区分进攻和防守
-        self._attack_weights = {
-            # 基础棋形 - 进攻
-            "five": self._win_score,  # 连五
-            "live_four": 10_000,  # 活四
-            "dead_four": 1_000,  # 冲四
-            "jump_four": 1_000,  # 跳四
-            "live_three": 1_000,  # 活三
-            "jump_three": 1_000,  # 跳三
-            "dead_three": 200,  # 冲三
-            "live_two": 50,  # 活二
-            "dead_two": 10,  # 冲二
-            # 复合威胁棋形 - 进攻
-            "double_dead_four": 10_000,  # 双冲四
-            "dead_four_live_three": 8_000,  # 冲四+活三
-            "dead_four_dead_three": 3_000,  # 冲四+眠三
-            "double_three": 4_000,  # 双活三
-        }
-
-        self._defense_weights = {
-            # 基础棋形 - 防守（防守分略高）
-            "five": self._win_score,  # 连五
-            "live_four": 10_000,  # 活四
-            "dead_four": 1_500,  # 冲四
-            "jump_four": 1_500,  # 跳四
-            "live_three": 1_200,  # 活三
-            "jump_three": 1_200,  # 跳三
-            "dead_three": 300,  # 冲三
-            "live_two": 50,  # 活二
-            "dead_two": 10,  # 冲二
-            # 复合威胁棋形 - 防守（防守分更高）
-            "double_dead_four": 10_000,  # 双冲四
-            "dead_four_live_three": 9_000,  # 冲四+活三
-            "dead_four_dead_three": 4_000,  # 冲四+眠三
-            "double_three": 5_000,  # 双活三
+        self._win_score = 1_000_000
+        self._pattern_weights = {
+            (5, 0): self._win_score,
+            (4, 2): 10_000,
+            (4, 1): 3_000,
+            (3, 2): 800,
+            (3, 1): 150,
+            (2, 2): 50,
+            (2, 1): 10,
         }
 
         # 搜索深度上限
@@ -94,9 +64,7 @@ class Search(Agent):
 
         return best_move
 
-    # ------------------------------
     # 核心搜索逻辑
-    # ------------------------------
 
     def _iterative_deepening(
         self,
@@ -336,9 +304,7 @@ class Search(Agent):
 
         return best
 
-    # ------------------------------
     # 走法生成与排序
-    # ------------------------------
 
     def _generate_moves(
         self,
@@ -431,15 +397,13 @@ class Search(Agent):
         scored_moves.sort(key=lambda item: item[0], reverse=True)
         return [move for _, move in scored_moves]
 
-    # ------------------------------
     # 评估函数相关
-    # ------------------------------
 
     def _evaluate_board(
         self,
         board_state: Dict[str, object],
     ) -> float:
-        """静态评估：返回当前局面的数值评分，区分进攻和防守。"""
+        """静态评估：返回当前局面的数值评分。"""
 
         board = board_state["board"]
         player = board_state["current_player"]
@@ -450,39 +414,12 @@ class Search(Agent):
         if self._has_five(board, opponent):
             return -self._win_score
 
-        # 进攻分：当前玩家的棋形用进攻权重
-        attack_score = self._score_player_with_weights(
-            board, player, self._attack_weights
-        )
+        player_score = self._score_player(board, player)
+        opponent_score = self._score_player(board, opponent)
 
-        # 防守分：对手的棋形用防守权重（因为需要防守对手）
-        defense_score = self._score_player_with_weights(
-            board, opponent, self._defense_weights
-        )
+        return player_score - opponent_score
 
-        return attack_score - defense_score
-
-    def _incremental_update(
-        self,
-        board_state: Dict[str, object],
-        move: Tuple[int, int],
-        previous_score: float,
-    ) -> float:
-        """增量评估：基于上一分数快速更新。"""
-        # 当前回退为全量评估；若后续确认瓶颈，可实现局部增量更新。
-        return self._evaluate_board(board_state)
-
-    def _detect_patterns(
-        self,
-        board_array: np.ndarray,
-    ) -> Dict[str, int]:
-        """统计棋盘上的关键棋形，用于评分。"""
-        # 预留丰富棋形检测的接口。
-        return {}
-
-    # ------------------------------
     # 局面变换与回溯
-    # ------------------------------
 
     def _apply_move(
         self,
@@ -540,9 +477,7 @@ class Search(Agent):
         board_state["empty_count"] += 1
         board_state["hash"] = record.get("previous_hash", 0)
 
-    # ------------------------------
     # 置换表与哈希
-    # ------------------------------
 
     def _probe_transposition(
         self,
@@ -652,9 +587,7 @@ class Search(Agent):
 
         return int(current_hash)
 
-    # ------------------------------
     # 时间控制与终止条件
-    # ------------------------------
 
     def _check_timeout(self, deadline: float) -> bool:
         """判断是否触发超时，供搜索在递归中及时返回。"""
@@ -673,9 +606,7 @@ class Search(Agent):
 
         return board_state["empty_count"] == 0
 
-    # ------------------------------
     # 辅助构造与工具函数
-    # ------------------------------
 
     def _build_state(self, board: np.ndarray) -> Dict[str, object]:
         """将外部棋盘矩阵包装为内部状态字典。"""
@@ -719,9 +650,7 @@ class Search(Agent):
         """获取对手编号。"""
         return 1 if player == 2 else 2
 
-    # ------------------------------
     # 内部工具函数
-    # ------------------------------
 
     def _select_search_depth(self, board_state: Dict[str, object]) -> int:
         """根据局面稠密度和时间预算选择搜索深度。"""
@@ -782,518 +711,29 @@ class Search(Agent):
         return potential
 
     def _score_player(self, board: np.ndarray, player: int) -> float:
-        """遍历所有行、列、对角线，为指定玩家累计评分，支持复杂棋形。"""
+        """遍历所有行、列、对角线，为指定玩家累计评分。"""
 
-        pattern_positions = self._detect_all_patterns(board, player)
-        return self._calculate_pattern_score(pattern_positions, self._attack_weights)
-
-    def _score_player_with_weights(
-        self, board: np.ndarray, player: int, weights: Dict[str, float]
-    ) -> float:
-        """使用指定权重为玩家计分。"""
-
-        pattern_positions = self._detect_all_patterns(board, player)
-        return self._calculate_pattern_score(pattern_positions, weights)
-
-    def _detect_all_patterns(
-        self, board: np.ndarray, player: int
-    ) -> Dict[str, List[Dict[str, object]]]:
-        """检测棋盘上指定玩家的所有棋形，返回棋形类型和关键点位置"""
-        patterns = {
-            "five": [],
-            "live_four": [],
-            "dead_four": [],
-            "jump_four": [],
-            "live_three": [],
-            "dead_three": [],
-            "jump_three": [],
-            "live_two": [],
-            "dead_two": [],
-        }
-
-        seen_keys: Dict[str, Set[Tuple]] = {key: set() for key in patterns}
-
-        size = board.shape[0]
-        directions = [(0, 1), (1, 0), (1, 1), (1, -1)]  # 四个方向
-
-        for row in range(size):
-            for col in range(size):
-                if board[row, col] != player:
-                    continue
-                for dr, dc in directions:
-                    pattern_info = self._analyze_line_pattern(
-                        board, row, col, dr, dc, player
-                    )
-                    if not pattern_info:
-                        continue
-                    pattern_type, instance = pattern_info
-                    if pattern_type not in patterns:
-                        continue
-
-                    key = instance["key"]
-                    if key not in seen_keys[pattern_type]:
-                        seen_keys[pattern_type].add(key)
-                        patterns[pattern_type].append(instance)
-
-        return patterns
-
-    def _analyze_line_pattern(
-        self,
-        board: np.ndarray,
-        start_row: int,
-        start_col: int,
-        dr: int,
-        dc: int,
-        player: int,
-    ) -> Optional[Tuple[str, Dict[str, object]]]:
-        """分析从指定位置开始在指定方向上的棋形"""
+        total = 0.0
         size = board.shape[0]
 
-        # 获取这条线上的信息（扩展到9个位置来分析棋形）
-        line_info = []
-        positions = []
-
-        # 向前扩展4个位置，向后扩展4个位置
-        for i in range(-4, 5):
-            r, c = start_row + i * dr, start_col + i * dc
-            if 0 <= r < size and 0 <= c < size:
-                line_info.append(board[r, c])
-                positions.append((r, c))
-            else:
-                line_info.append(-1)  # 边界标记
-                positions.append((-1, -1))
-
-        # 分析这9个位置的棋形
-        return self._classify_pattern(
-            line_info, positions, player, 4, (dr, dc)
-        )  # 4是起始位置在line_info中的索引
-
-    def _classify_pattern(
-        self,
-        line: List[int],
-        positions: List[Tuple[int, int]],
-        player: int,
-        center_idx: int,
-        direction: Tuple[int, int],
-    ) -> Optional[Tuple[str, Dict[str, object]]]:
-        """对9个位置的序列进行棋形分类"""
-        # 如果中心位置不是当前玩家的棋子，直接返回
-        if line[center_idx] != player:
-            return None
-
-        five_instance = self._check_five_pattern(
-            line, positions, center_idx, player, direction
-        )
-        if five_instance is not None:
-            return "five", five_instance
-
-        # 检查四子相关棋形
-        four_result = self._check_four_patterns(
-            line, positions, center_idx, player, direction
-        )
-        if four_result:
-            return four_result
-
-        # 检查三子相关棋形
-        three_result = self._check_three_patterns(
-            line, positions, center_idx, player, direction
-        )
-        if three_result:
-            return three_result
-
-        # 检查二子相关棋形
-        two_result = self._check_two_patterns(
-            line, positions, center_idx, player, direction
-        )
-        if two_result:
-            return two_result
-
-        return None
-
-    def _check_five_pattern(
-        self,
-        line: List[int],
-        positions: List[Tuple[int, int]],
-        center_idx: int,
-        player: int,
-        direction: Tuple[int, int],
-    ) -> Optional[Dict[str, object]]:
-        """检查连五"""
-
-        start = center_idx
-        while start - 1 >= 0 and line[start - 1] == player:
-            start -= 1
-
-        end = center_idx
-        while end + 1 < len(line) and line[end + 1] == player:
-            end += 1
-
-        indices = [idx for idx in range(start, end + 1) if positions[idx] != (-1, -1)]
-        stones = [positions[idx] for idx in indices if line[idx] == player]
-
-        if len(stones) < 5:
-            return None
-
-        return self._make_pattern_instance(
-            "five", indices, line, positions, player, direction
-        )
-
-    def _check_four_patterns(
-        self,
-        line: List[int],
-        positions: List[Tuple[int, int]],
-        center_idx: int,
-        player: int,
-        direction: Tuple[int, int],
-    ) -> Optional[Tuple[str, Dict[str, object]]]:
-        """检查四子相关棋形：活四、冲四、跳四"""
-
-        # 检查各种四子模式
-        patterns_to_check = [
-            # 活四模式：_XXXX_
-            ([0, player, player, player, player, 0], "live_four"),
-            # 冲四模式：XXXX_ 或 _XXXX 或 边界XXXX
-            ([player, player, player, player, 0], "dead_four"),
-            ([0, player, player, player, player], "dead_four"),
-            ([-1, player, player, player, player], "dead_four"),
-            ([player, player, player, player, -1], "dead_four"),
-            # 跳四模式：X_XXX, XX_XX, XXX_X
-            ([player, 0, player, player, player], "jump_four"),
-            ([player, player, 0, player, player], "jump_four"),
-            ([player, player, player, 0, player], "jump_four"),
-        ]
-
-        for pattern, pattern_type in patterns_to_check:
-            for start_pos in range(max(0, len(line) - len(pattern) + 1)):
-                if start_pos + len(pattern) <= len(line):
-                    if line[start_pos : start_pos + len(pattern)] == pattern:
-                        if not (start_pos <= center_idx < start_pos + len(pattern)):
-                            continue
-
-                        stone_indices = [
-                            idx
-                            for idx in range(start_pos, start_pos + len(pattern))
-                            if line[idx] == player and positions[idx] != (-1, -1)
-                        ]
-                        if not stone_indices:
-                            continue
-
-                        open_left = (
-                            stone_indices[0] - 1 >= 0
-                            and line[stone_indices[0] - 1] == 0
-                        )
-                        open_right = (
-                            stone_indices[-1] + 1 < len(line)
-                            and line[stone_indices[-1] + 1] == 0
-                        )
-
-                        left_idx = start_pos - 1
-                        right_idx = start_pos + len(pattern)
-                        left_val = line[left_idx] if left_idx >= 0 else -1
-                        right_val = (
-                            line[right_idx] if right_idx < len(line) else -1
-                        )
-
-                        if pattern_type == "live_four":
-                            # 活四要求两端都为真空位
-                            if not (open_left and open_right):
-                                continue
-                            if (
-                                positions[start_pos] == (-1, -1)
-                                or positions[start_pos + len(pattern) - 1] == (-1, -1)
-                            ):
-                                continue
-
-                        if pattern_type == "jump_four":
-                            open_ends = sum(
-                                1 for value in (left_val, right_val) if value == 0
-                            )
-                            final_type = (
-                                "dead_four"
-                                if open_ends == 0
-                                else "jump_four"
-                            )
-                        else:
-                            final_type = pattern_type
-
-                        if final_type == "dead_four" and open_left and open_right:
-                            continue
-
-                        instance = self._make_pattern_instance(
-                            final_type,
-                            range(start_pos, start_pos + len(pattern)),
-                            line,
-                            positions,
-                            player,
-                            direction,
-                        )
-
-                        if instance is not None:
-                            return final_type, instance
-
-        return None
-
-    def _check_three_patterns(
-        self,
-        line: List[int],
-        positions: List[Tuple[int, int]],
-        center_idx: int,
-        player: int,
-        direction: Tuple[int, int],
-    ) -> Optional[Tuple[str, Dict[str, object]]]:
-        """检查三子相关棋形：活三、冲三、跳三"""
-
-        patterns_to_check = [
-            # 活三模式：_XXX_
-            ([0, player, player, player, 0], "live_three"),
-            # 冲三模式
-            ([player, player, player, 0], "dead_three"),
-            ([0, player, player, player], "dead_three"),
-            ([-1, player, player, player], "dead_three"),
-            ([player, player, player, -1], "dead_three"),
-            # 跳三模式：X_XX, XX_X
-            ([player, 0, player, player], "jump_three"),
-            ([player, player, 0, player], "jump_three"),
-        ]
-
-        for pattern, pattern_type in patterns_to_check:
-            for start_pos in range(max(0, len(line) - len(pattern) + 1)):
-                if start_pos + len(pattern) <= len(line):
-                    if line[start_pos : start_pos + len(pattern)] == pattern:
-                        if not (start_pos <= center_idx < start_pos + len(pattern)):
-                            continue
-
-                        stone_indices = [
-                            idx
-                            for idx in range(start_pos, start_pos + len(pattern))
-                            if line[idx] == player and positions[idx] != (-1, -1)
-                        ]
-                        if not stone_indices:
-                            continue
-
-                        open_left = (
-                            stone_indices[0] - 1 >= 0
-                            and line[stone_indices[0] - 1] == 0
-                        )
-                        open_right = (
-                            stone_indices[-1] + 1 < len(line)
-                            and line[stone_indices[-1] + 1] == 0
-                        )
-
-                        left_idx = start_pos - 1
-                        right_idx = start_pos + len(pattern)
-                        left_val = line[left_idx] if left_idx >= 0 else -1
-                        right_val = (
-                            line[right_idx] if right_idx < len(line) else -1
-                        )
-
-                        if pattern_type == "live_three":
-                            if not (open_left and open_right):
-                                continue
-                            if (
-                                positions[start_pos] == (-1, -1)
-                                or positions[start_pos + len(pattern) - 1] == (-1, -1)
-                            ):
-                                continue
-
-                        if pattern_type == "jump_three":
-                            open_ends = sum(
-                                1 for value in (left_val, right_val) if value == 0
-                            )
-                            final_type = (
-                                "dead_three"
-                                if open_ends == 0
-                                else "jump_three"
-                            )
-                        else:
-                            final_type = pattern_type
-
-                        if final_type == "dead_three" and open_left and open_right:
-                            continue
-
-                        instance = self._make_pattern_instance(
-                            final_type,
-                            range(start_pos, start_pos + len(pattern)),
-                            line,
-                            positions,
-                            player,
-                            direction,
-                        )
-
-                        if instance is not None:
-                            return final_type, instance
-
-        return None
-
-    def _check_two_patterns(
-        self,
-        line: List[int],
-        positions: List[Tuple[int, int]],
-        center_idx: int,
-        player: int,
-        direction: Tuple[int, int],
-    ) -> Optional[Tuple[str, Dict[str, object]]]:
-        """检查二子相关棋形：活二、冲二"""
-        patterns_to_check = [
-            # 活二模式：_XX_
-            ([0, player, player, 0], "live_two"),
-            # 冲二模式
-            ([player, player, 0], "dead_two"),
-            ([0, player, player], "dead_two"),
-            ([-1, player, player], "dead_two"),
-            ([player, player, -1], "dead_two"),
-        ]
-
-        for pattern, pattern_type in patterns_to_check:
-            for start_pos in range(max(0, len(line) - len(pattern) + 1)):
-                if start_pos + len(pattern) <= len(line):
-                    if line[start_pos : start_pos + len(pattern)] == pattern:
-                        if not (start_pos <= center_idx < start_pos + len(pattern)):
-                            continue
-
-                        stone_indices = [
-                            idx
-                            for idx in range(start_pos, start_pos + len(pattern))
-                            if line[idx] == player and positions[idx] != (-1, -1)
-                        ]
-                        if not stone_indices:
-                            continue
-
-                        open_left = (
-                            stone_indices[0] - 1 >= 0
-                            and line[stone_indices[0] - 1] == 0
-                        )
-                        open_right = (
-                            stone_indices[-1] + 1 < len(line)
-                            and line[stone_indices[-1] + 1] == 0
-                        )
-
-                        left_idx = start_pos - 1
-                        right_idx = start_pos + len(pattern)
-                        left_val = line[left_idx] if left_idx >= 0 else -1
-                        right_val = (
-                            line[right_idx] if right_idx < len(line) else -1
-                        )
-
-                        if pattern_type == "live_two":
-                            if not (open_left and open_right):
-                                continue
-                            if (
-                                positions[start_pos] == (-1, -1)
-                                or positions[start_pos + len(pattern) - 1] == (-1, -1)
-                            ):
-                                continue
-
-                        if pattern_type == "dead_two" and open_left and open_right:
-                            continue
-
-                        instance = self._make_pattern_instance(
-                            pattern_type,
-                            range(start_pos, start_pos + len(pattern)),
-                            line,
-                            positions,
-                            player,
-                            direction,
-                        )
-
-                        if instance is not None:
-                            return pattern_type, instance
-
-        return None
-
-    def _make_pattern_instance(
-        self,
-        pattern_type: str,
-        indices: Iterable[int],
-        line: List[int],
-        positions: List[Tuple[int, int]],
-        player: int,
-        direction: Tuple[int, int],
-    ) -> Optional[Dict[str, object]]:
-        """根据匹配到的索引构造棋形实例。"""
-
-        stones: List[Tuple[int, int]] = []
-        empties: List[Tuple[int, int]] = []
-
-        for idx in indices:
-            if idx < 0 or idx >= len(line):
-                continue
-            pos = positions[idx]
-            if pos == (-1, -1):
-                continue
-            if line[idx] == player:
-                stones.append(pos)
-            elif line[idx] == 0:
-                empties.append(pos)
-
-        if not stones:
-            return None
-
-        stones_tuple = tuple(sorted(stones))
-        empties_tuple = tuple(sorted(empties))
-
-        return {
-            "type": pattern_type,
-            "stones": stones_tuple,
-            "empties": empties_tuple,
-            "direction": direction,
-            "key": (direction, stones_tuple, empties_tuple),
-        }
-
-    def _calculate_pattern_score(
-        self, patterns: Dict[str, List[Dict[str, object]]], weights: Dict[str, float]
-    ) -> float:
-        """根据检测到的棋形计算总分，包括去重和复合威胁检测"""
-        score = 0.0
-
-        # 统计各种棋形的数量
-        pattern_counts: Dict[str, int] = {}
-        for pattern_type, occurrences in patterns.items():
-            pattern_counts[pattern_type] = len(occurrences)
-
-        # 检测复合威胁
-        composite_score = self._detect_composite_threats_with_weights(patterns, weights)
-        score += composite_score
-
-        # 基础棋形计分（如果没有复合威胁，才计算基础分）
-        if composite_score == 0:
-            for pattern_type, count in pattern_counts.items():
-                if count > 0 and pattern_type in weights:
-                    # 相同棋形不叠加，取最高分
-                    score += weights[pattern_type]
-
-        return score
-
-    def _detect_composite_threats_with_weights(
-        self, patterns: Dict[str, List[Dict[str, object]]], weights: Dict[str, float]
-    ) -> float:
-        """检测复合威胁：双冲四、冲四活三、冲四眠三、双活三等"""
-        score = 0.0
-
-        # 统计各种棋形数量
-        live_fours = len(patterns["live_four"])
-        dead_fours = len(patterns["dead_four"]) + len(patterns["jump_four"])
-        live_threes = len(patterns["live_three"]) + len(patterns["jump_three"])  # 跳三也算活三
-        dead_threes = len(patterns["dead_three"])
-
-        # 活四已经是最高分，不需要复合威胁分析
-        if live_fours > 0:
-            return 0
-
-        # 双冲四（一步制胜威胁，与活四同等重要）
-        if dead_fours >= 2:
-            score += weights.get("double_dead_four", 0)
-        # 冲四+活三（必胜组合）
-        elif dead_fours >= 1 and live_threes >= 1:
-            score += weights.get("dead_four_live_three", 0)
-        # 冲四+眠三（强威胁）
-        elif dead_fours >= 1 and dead_threes >= 1:
-            score += weights.get("dead_four_dead_three", 0)
-        # 双活三（包括跳三）
-        elif live_threes >= 2:
-            score += weights.get("double_three", 0)
-
-        return score
+        for row in board:
+            total += self._score_line(row.tolist(), player)
+
+        for col in board.T:
+            total += self._score_line(col.tolist(), player)
+
+        for offset in range(-size + 1, size):
+            diag = np.diagonal(board, offset)
+            if diag.size >= 2:
+                total += self._score_line(diag.tolist(), player)
+
+        flipped = np.fliplr(board)
+        for offset in range(-size + 1, size):
+            diag = np.diagonal(flipped, offset)
+            if diag.size >= 2:
+                total += self._score_line(diag.tolist(), player)
+
+        return total
 
     def _score_line(self, line: List[int], player: int) -> float:
         """计算一维序列中指定玩家的棋形得分。"""
@@ -1319,14 +759,7 @@ class Search(Agent):
             if segment_len >= 5:
                 score += self._win_score
             else:
-                # 使用简化的传统评分作为后备
-                pattern_scores = {
-                    (4, 2): 10_000, (4, 1): 1_000, (4, 0): 500,
-                    (3, 2): 1_000, (3, 1): 200, (3, 0): 50,
-                    (2, 2): 50, (2, 1): 10, (2, 0): 5,
-                    (1, 2): 5, (1, 1): 1, (1, 0): 1
-                }
-                score += pattern_scores.get((segment_len, open_ends), 0)
+                score += self._pattern_weights.get((segment_len, open_ends), 0)
 
             i = j
 

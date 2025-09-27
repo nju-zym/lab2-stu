@@ -1,3 +1,14 @@
+"""Gomoku 搜索引擎基础框架（单文件版本）。
+
+在保持接口简洁的前提下搭建可运行的搜索 AI 骨架，核心特性：
+- 迭代加深 + Negamax + Alpha-Beta 剪枝
+- 启发式走法排序
+- 基于行扫描的静态评估
+- 为置换表、Zobrist 哈希、增量评估等高级优化预留 TODO
+
+当前实现旨在先得到稳定可用的 AI，后续可在指定位置扩展性能优化。
+"""
+
 from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -11,7 +22,9 @@ from agent import Agent
 class Search(Agent):
     """单文件的五子棋搜索 AI 框架。"""
 
+    # ------------------------------
     # 对外接口区域
+    # ------------------------------
 
     def __init__(
         self,
@@ -24,7 +37,7 @@ class Search(Agent):
         self.board_size = board_size
         self.time_limit = time_limit
 
-        # 评分常量
+        # 评分常量，可按需调整。
         self._win_score = 1_000_000
         self._pattern_weights = {
             (5, 0): self._win_score,
@@ -36,19 +49,12 @@ class Search(Agent):
             (2, 1): 10,
         }
 
-        # 搜索深度上限
-        self._max_depth_upper = 6
+        # 搜索深度上限（TODO: 根据时间和局面动态调整）。
+        self._max_depth_upper = 4
 
         # 预留的数据结构
-        self._zobrist_seed = 20240515
-        self._zobrist_cache: Dict[int, np.ndarray] = {}
-        self._zobrist_table: Optional[np.ndarray] = (
-            None  # 当前棋盘尺寸对应的 Zobrist 哈希表
-        )
-
+        self._zobrist_table: Optional[np.ndarray] = None  # Zobrist 哈希表
         self._transposition_table: Dict[int, Dict[str, object]] = {}  # 置换表缓存
-        self._transposition_limit = 200_000
-        self._killer_moves: Dict[int, List[Tuple[int, int]]] = {}
         self._pattern_cache: Dict[str, np.ndarray] = {}  # 棋形卷积核缓存
         self._history_heuristic: Dict[Tuple[int, int], float] = {}  # 历史启发表
 
@@ -64,7 +70,9 @@ class Search(Agent):
 
         return best_move
 
+    # ------------------------------
     # 核心搜索逻辑
+    # ------------------------------
 
     def _iterative_deepening(
         self,
@@ -77,13 +85,6 @@ class Search(Agent):
         best_score = float("-inf")
         principal_variation: List[Tuple[int, int]] = []
         depth_limit = self._select_search_depth(board_state)
-
-        self._killer_moves.clear()
-        if self._history_heuristic:
-            for key in list(self._history_heuristic.keys()):
-                self._history_heuristic[key] *= 0.9
-                if self._history_heuristic[key] < 1.0:
-                    del self._history_heuristic[key]
 
         info: Dict[str, object] = {
             "score": 0.0,
@@ -102,7 +103,6 @@ class Search(Agent):
                 board_state,
                 deadline,
                 principal_variation,
-                ply=0,
             )
 
             if self._check_timeout(deadline):
@@ -112,14 +112,14 @@ class Search(Agent):
                 {
                     "score": score,
                     "depth": depth,
-                    "principal_variation": pv_line if pv_line else [],
+                    "principal_variation": [move, *pv_line] if move else pv_line,
                 }
             )
 
             if move is not None:
                 best_move = move
                 best_score = score
-                principal_variation = pv_line if pv_line else [move]
+                principal_variation = [move, *pv_line]
 
             if best_score >= self._win_score:
                 break
@@ -134,53 +134,24 @@ class Search(Agent):
         board_state: Dict[str, object],
         deadline: float,
         principal_variation: Sequence[Tuple[int, int]] = (),
-        ply: int = 0,
     ) -> Tuple[float, Optional[Tuple[int, int]], List[Tuple[int, int]]]:
         """Negamax + Alpha-Beta 剪枝的递归核心。"""
 
         if self._check_timeout(deadline):
             return self._evaluate_board(board_state), None, []
 
-        if self._is_terminal(board_state):
+        if depth == 0 or self._is_terminal(board_state):
             return self._evaluate_board(board_state), None, []
-
-        if depth == 0:
-            score = self._quiescence_search(alpha, beta, board_state, deadline, ply)
-            return score, None, []
 
         best_score = float("-inf")
         best_move: Optional[Tuple[int, int]] = None
         best_line: List[Tuple[int, int]] = []
 
-        alpha_initial = alpha
-        beta_initial = beta
-
-        tt_move_hint: Optional[Tuple[int, int]] = None
-        tt_probe = self._probe_transposition(board_state, depth, alpha, beta)
-        if tt_probe is not None:
-            tt_value, tt_move, alpha, beta, tt_flag = tt_probe
-            if tt_move is not None:
-                tt_move_hint = tt_move
-            if tt_flag in {"EXACT", "CUT"} and tt_value is not None:
-                return tt_value, tt_move, [tt_move] if tt_move is not None else []
-
         moves = list(self._generate_moves(board_state))
         if not moves:
             return self._evaluate_board(board_state), None, []
 
-        ordering_hint: List[Tuple[int, int]] = list(principal_variation)
-        if tt_move_hint is not None and (
-            not ordering_hint or ordering_hint[0] != tt_move_hint
-        ):
-            ordering_hint = [tt_move_hint, *ordering_hint]
-
-        ordered_moves = self._order_moves(
-            moves,
-            board_state,
-            ordering_hint,
-            depth=depth,
-            ply=ply,
-        )
+        ordered_moves = self._order_moves(moves, board_state, principal_variation)
 
         for move in ordered_moves:
             self._apply_move(board_state, move)
@@ -197,7 +168,6 @@ class Search(Agent):
                 board_state,
                 deadline,
                 child_pv,
-                ply=ply + 1,
             )
 
             score = -score
@@ -209,102 +179,18 @@ class Search(Agent):
                 best_move = move
                 best_line = [move, *child_line]
 
-                if score > alpha_initial and move is not None:
-                    self._update_history(board_state, move, depth, ply)
-
             alpha = max(alpha, best_score)
             if alpha >= beta:
-                if move is not None:
-                    self._register_killer_move(ply, move)
                 break
 
             if self._check_timeout(deadline):
                 break
 
-        store_flag = "EXACT"
-        if best_score <= alpha_initial:
-            store_flag = "UPPER"
-        elif best_score >= beta_initial:
-            store_flag = "LOWER"
+        return best_score, best_move, best_line[1:] if best_line else []
 
-        self._store_transposition(
-            board_state,
-            depth,
-            best_score,
-            store_flag,
-            best_move,
-            alpha_initial,
-            beta_initial,
-        )
-
-        return best_score, best_move, best_line
-
-    def _quiescence_search(
-        self,
-        alpha: float,
-        beta: float,
-        board_state: Dict[str, object],
-        deadline: float,
-        ply: int = 0,
-    ) -> float:
-        """静态搜索：延伸强制胜负走法，缓解地平线效应。"""
-
-        if self._check_timeout(deadline):
-            return self._evaluate_board(board_state)
-
-        stand_pat = self._evaluate_board(board_state)
-        if stand_pat >= beta:
-            return stand_pat
-
-        if stand_pat > alpha:
-            alpha = stand_pat
-
-        urgent_moves: List[Tuple[int, int]] = []
-        moves = list(self._generate_moves(board_state))
-        player = board_state["current_player"]
-
-        for move in moves:
-            row, col = move
-            board = board_state["board"]
-            if board[row, col] != 0:
-                continue
-            board[row, col] = player
-            is_win = self._check_win(board, row, col, player)
-            board[row, col] = 0
-            if is_win:
-                urgent_moves.append(move)
-
-        if not urgent_moves:
-            return alpha
-
-        urgent_moves = self._order_moves(
-            urgent_moves,
-            board_state,
-            principal_variation=(),
-            depth=0,
-            ply=ply,
-        )
-
-        best = stand_pat
-
-        for move in urgent_moves:
-            self._apply_move(board_state, move)
-            score = -self._quiescence_search(
-                -beta, -alpha, board_state, deadline, ply + 1
-            )
-            self._undo_move(board_state)
-
-            if score > best:
-                best = score
-            if best >= beta:
-                self._register_killer_move(ply, move)
-                return best
-            if best > alpha:
-                alpha = best
-
-        return best
-
+    # ------------------------------
     # 走法生成与排序
+    # ------------------------------
 
     def _generate_moves(
         self,
@@ -344,8 +230,6 @@ class Search(Agent):
         moves: Iterable[Tuple[int, int]],
         board_state: Dict[str, object],
         principal_variation: Sequence[Tuple[int, int]] = (),
-        depth: int = 0,
-        ply: int = 0,
     ) -> List[Tuple[int, int]]:
         """结合多种启发式对走法按优先级排序。"""
 
@@ -356,7 +240,6 @@ class Search(Agent):
         center = (size - 1) / 2.0
 
         pv_set: Set[Tuple[int, int]] = {mv for mv in principal_variation}
-        killer_moves = self._killer_moves.get(ply, [])
         scored_moves: List[Tuple[float, Tuple[int, int]]] = []
 
         for move in moves:
@@ -366,15 +249,8 @@ class Search(Agent):
             if move in pv_set:
                 bonus += 10_000
 
-            if move in killer_moves:
-                # 最近的 killer 列表长度不超过 2
-                bonus += 6_000 - killer_moves.index(move) * 500
-
             center_distance = abs(row - center) + abs(col - center)
             score = -center_distance
-
-            hist_key = (player, row * size + col)
-            history_score = self._history_heuristic.get(hist_key, 0.0)
 
             if board[row, col] == 0:
                 board[row, col] = player
@@ -390,14 +266,15 @@ class Search(Agent):
                 board[row, col] = 0
 
             score += bonus
-            score += history_score
             score += self._estimate_move_potential(board, move, player)
             scored_moves.append((score, move))
 
         scored_moves.sort(key=lambda item: item[0], reverse=True)
         return [move for _, move in scored_moves]
 
+    # ------------------------------
     # 评估函数相关
+    # ------------------------------
 
     def _evaluate_board(
         self,
@@ -419,7 +296,27 @@ class Search(Agent):
 
         return player_score - opponent_score
 
+    def _incremental_update(
+        self,
+        board_state: Dict[str, object],
+        move: Tuple[int, int],
+        previous_score: float,
+    ) -> float:
+        """增量评估：基于上一分数快速更新。"""
+        # TODO: 实现局部增量更新。当前回退为全量评估。
+        return self._evaluate_board(board_state)
+
+    def _detect_patterns(
+        self,
+        board_array: np.ndarray,
+    ) -> Dict[str, int]:
+        """统计棋盘上的关键棋形，用于评分。"""
+        # TODO: 引入更丰富的棋形检测。
+        return {}
+
+    # ------------------------------
     # 局面变换与回溯
+    # ------------------------------
 
     def _apply_move(
         self,
@@ -435,27 +332,22 @@ class Search(Agent):
         if board[row, col] != 0:
             raise ValueError(f"非法落子位置: {move}")
 
-        previous_hash = board_state.get("hash", 0)
-
         record = {
             "move": move,
             "player": player,
             "previous_last_move": board_state.get("last_move"),
             "previous_last_player": board_state.get("last_player"),
-            "previous_hash": previous_hash,
         }
 
         board_state["move_stack"].append(record)
 
-        new_hash = self._update_hash(
-            board_state, move, player, old_piece=board[row, col]
-        )
         board[row, col] = player
         board_state["last_move"] = move
         board_state["last_player"] = player
         board_state["current_player"] = self._opponent(player)
         board_state["empty_count"] -= 1
-        board_state["hash"] = new_hash
+
+        # TODO: 在此接入Zobrist哈希及置换表更新。
 
     def _undo_move(
         self,
@@ -475,9 +367,12 @@ class Search(Agent):
         board_state["last_move"] = record["previous_last_move"]
         board_state["last_player"] = record["previous_last_player"]
         board_state["empty_count"] += 1
-        board_state["hash"] = record.get("previous_hash", 0)
 
+        # TODO: 回滚Zobrist哈希及置换表状态。
+
+    # ------------------------------
     # 置换表与哈希
+    # ------------------------------
 
     def _probe_transposition(
         self,
@@ -485,37 +380,10 @@ class Search(Agent):
         depth: int,
         alpha: float,
         beta: float,
-    ) -> Optional[Tuple[Optional[float], Optional[Tuple[int, int]], float, float, str]]:
+    ) -> Optional[Tuple[float, Optional[Tuple[int, int]], float, float]]:
         """置换表查询：返回缓存的分数与搜索窗口。"""
-
-        key = board_state.get("hash")
-        if key is None:
-            return None
-
-        entry = self._transposition_table.get(key)
-        if entry is None:
-            return None
-
-        best_move = entry.get("best_move")
-        entry_value = entry.get("value")
-        entry_depth = entry.get("depth", 0)
-        entry_flag = entry.get("flag", "NONE")
-
-        if entry_depth < depth:
-            return (None, best_move, alpha, beta, "HINT")
-
-        if entry_flag == "EXACT":
-            return (entry_value, best_move, alpha, beta, "EXACT")
-
-        if entry_flag == "LOWER":
-            alpha = max(alpha, entry_value)
-        elif entry_flag == "UPPER":
-            beta = min(beta, entry_value)
-
-        if alpha >= beta:
-            return (entry_value, best_move, alpha, beta, "CUT")
-
-        return (None, best_move, alpha, beta, entry_flag)
+        # TODO: 接入真实的置换表查询逻辑。
+        return None
 
     def _store_transposition(
         self,
@@ -524,70 +392,31 @@ class Search(Agent):
         score: float,
         flag: str,
         best_move: Optional[Tuple[int, int]],
-        alpha: float,
-        beta: float,
     ) -> None:
         """置换表写入：缓存已搜索的局面信息。"""
-
-        key = board_state.get("hash")
-        if key is None:
-            return
-
-        if len(self._transposition_table) >= self._transposition_limit:
-            # 简单的 FIFO 淘汰策略
-            try:
-                self._transposition_table.pop(next(iter(self._transposition_table)))
-            except StopIteration:
-                pass
-
-        self._transposition_table[key] = {
-            "value": score,
-            "depth": depth,
-            "flag": flag,
-            "best_move": best_move,
-            "alpha": alpha,
-            "beta": beta,
-        }
+        # TODO: 接入真实的置换表写入逻辑。
+        return
 
     def _ensure_zobrist(self, board_size: int) -> None:
         """初始化或重置 Zobrist 哈希表。"""
-
-        if board_size not in self._zobrist_cache:
-            rng = np.random.default_rng(self._zobrist_seed + board_size)
-            table = rng.integers(
-                low=1,
-                high=np.iinfo(np.uint64).max,
-                size=(board_size, board_size, 3),
-                dtype=np.uint64,
-            )
-            self._zobrist_cache[board_size] = table
-
-        self._zobrist_table = self._zobrist_cache[board_size]
+        # TODO: 生成随机位串用于哈希，并配合置换表使用。
+        if self._zobrist_table is None or self._zobrist_table.shape[0] != board_size:
+            # TODO: 使用高质量随机表。目前以简单占位数据替代，避免初始化开销。
+            self._zobrist_table = np.zeros((board_size, board_size, 3), dtype=np.uint64)
 
     def _update_hash(
         self,
         board_state: Dict[str, object],
         move: Tuple[int, int],
         player: int,
-        old_piece: int = 0,
     ) -> int:
         """增量更新当前哈希值。"""
+        # TODO: 实现基于Zobrist的哈希增量更新。
+        return 0
 
-        if self._zobrist_table is None:
-            raise RuntimeError("Zobrist 哈希表尚未初始化")
-
-        current_hash = np.uint64(board_state.get("hash", 0))
-        row, col = move
-
-        if old_piece:
-            current_hash ^= self._zobrist_table[row, col, old_piece]
-
-        if player:
-            current_hash ^= self._zobrist_table[row, col, player]
-
-        return int(current_hash)
-
+    # ------------------------------
     # 时间控制与终止条件
+    # ------------------------------
 
     def _check_timeout(self, deadline: float) -> bool:
         """判断是否触发超时，供搜索在递归中及时返回。"""
@@ -606,7 +435,9 @@ class Search(Agent):
 
         return board_state["empty_count"] == 0
 
+    # ------------------------------
     # 辅助构造与工具函数
+    # ------------------------------
 
     def _build_state(self, board: np.ndarray) -> Dict[str, object]:
         """将外部棋盘矩阵包装为内部状态字典。"""
@@ -631,8 +462,6 @@ class Search(Agent):
         current_player = 1 if stones_player1 == stones_player2 else 2
         empty_count = size * size - stones_player1 - stones_player2
 
-        board_hash = self._compute_hash(board_array)
-
         state: Dict[str, object] = {
             "board": board_array.copy(),
             "size": size,
@@ -641,7 +470,6 @@ class Search(Agent):
             "last_player": None,
             "move_stack": [],
             "empty_count": empty_count,
-            "hash": board_hash,
         }
 
         return state
@@ -650,7 +478,9 @@ class Search(Agent):
         """获取对手编号。"""
         return 1 if player == 2 else 2
 
+    # ------------------------------
     # 内部工具函数
+    # ------------------------------
 
     def _select_search_depth(self, board_state: Dict[str, object]) -> int:
         """根据局面稠密度和时间预算选择搜索深度。"""
@@ -659,10 +489,10 @@ class Search(Agent):
         total = board_state["size"] ** 2
 
         if empties > total * 0.6:
-            return 4
+            return 2
         if empties > total * 0.3:
-            return 5
-        return min(self._max_depth_upper, 6)
+            return 4
+        return min(self._max_depth_upper, 4)
 
     def _estimate_move_potential(
         self,
@@ -805,46 +635,3 @@ class Search(Agent):
             if self._check_win(board, int(row), int(col), player):
                 return True
         return False
-
-    def _compute_hash(self, board_array: np.ndarray) -> int:
-        """基于当前棋盘计算完整的 Zobrist 哈希值。"""
-
-        if (
-            self._zobrist_table is None
-            or self._zobrist_table.shape[0] != board_array.shape[0]
-        ):
-            self._ensure_zobrist(board_array.shape[0])
-
-        current_hash = np.uint64(0)
-        positions = np.argwhere(board_array != 0)
-        for row, col in positions:
-            piece = int(board_array[row, col])
-            current_hash ^= self._zobrist_table[row, col, piece]
-
-        return int(current_hash)
-
-    def _register_killer_move(self, ply: int, move: Tuple[int, int]) -> None:
-        """记录在指定层深引发剪枝的 killer 走法。"""
-
-        killers = self._killer_moves.setdefault(ply, [])
-        if move in killers:
-            killers.remove(move)
-        killers.insert(0, move)
-        if len(killers) > 2:
-            killers.pop()
-
-    def _update_history(
-        self,
-        board_state: Dict[str, object],
-        move: Tuple[int, int],
-        depth: int,
-        ply: int,
-    ) -> None:
-        """根据提升 alpha 的走法更新历史启发表。"""
-
-        size = board_state["size"]
-        player = board_state["current_player"]
-        key = (player, move[0] * size + move[1])
-        bonus = depth * depth + max(0, 3 - ply)
-        updated = self._history_heuristic.get(key, 0.0) + bonus
-        self._history_heuristic[key] = min(updated, 1e7)
